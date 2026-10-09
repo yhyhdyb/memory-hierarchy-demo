@@ -1,104 +1,56 @@
+=== C++ 自定义容器 Allocator 性能优化演示 ===
+生成时间: 
+配置: NODE_NUM=200000, LOOKUP_NUM=50000, ROUNDS=3, CHURN_ROUNDS=40
+计时方式: clock() CPU 时间，单位毫秒（整数微秒换算）
 
-  ============================================================
-   内存 · 磁盘 · 多级访存 · DMA —— 实测演示
-  ============================================================
-  实验1  多级访存：L1/L2/L3 缓存与主存的访问延迟阶梯
-  实验2  内存 vs 磁盘：带宽与随机访问延迟对比
-  实验3  DMA：CPU 亲自搬运 vs 硬件搬运并行
-
-──────────────────────────────────────────────────────────────
-  系统信息
-──────────────────────────────────────────────────────────────
-  检测到的 CPU 缓存: L1=32KB(行64B), L2=256KB(行64B), L3=16384KB(行64B)
-  物理内存: 15.87 GB
-
-──────────────────────────────────────────────────────────────
-  实验1 多级访存：缓存层级延迟扫描（随机访问，指针追逐法）
-──────────────────────────────────────────────────────────────
-  测量 4.0 KB ... 完成
-  测量 8.0 KB ... 完成
-  测量 16.0 KB ... 完成
-  测量 32.0 KB ... 完成
-  测量 64.0 KB ... 完成
-  测量 128.0 KB ... 完成
-  测量 256.0 KB ... 完成
-  测量 512.0 KB ... 完成
-  测量 1.0 MB ... 完成
-  测量 2.0 MB ... 完成
-  测量 4.0 MB ... 完成
-  测量 8.0 MB ... 完成
-  测量 16.0 MB ... 完成
-  测量 32.0 MB ... 完成
-  测量 64.0 MB ... 完成
-  测量 128.0 MB ... 完成
-  测量 256.0 MB ... 完成
-
-  数组大小      单次访问延迟    预期所在层级
-  ────────────────────────────────────────────────
-  4.0 KB            2.72 ns    L1 内(命中率高)
-  8.0 KB            2.55 ns    L1 内(命中率高)
-  16.0 KB           2.72 ns    L1 内(命中率高)
-  32.0 KB           2.51 ns    L1 内(命中率高)
-  64.0 KB           3.43 ns    L2 内(命中率高)
-  128.0 KB          3.91 ns    L2 内(命中率高)
-  256.0 KB          5.18 ns    L2 内(命中率高)
-  512.0 KB          9.82 ns    L3 内(命中率高)
-  1.0 MB           11.03 ns    L3 内(命中率高)
-  2.0 MB           16.63 ns    L3 内(命中率高)
-  4.0 MB           19.26 ns    L3 内(命中率高)
-  8.0 MB           16.75 ns    L3 内(命中率高)
-  16.0 MB          63.24 ns    L3 内(命中率高)
-  32.0 MB          56.99 ns    超出最后一级缓存 → 主存
-  64.0 MB          73.58 ns    超出最后一级缓存 → 主存
-  128.0 MB         81.85 ns    超出最后一级缓存 → 主存 + TLB 抖动
-  256.0 MB         84.10 ns    超出最后一级缓存 → 主存 + TLB 抖动
-
-  解读：数组超过某一级缓存容量后，访问延迟会明显跳升，
-        这条“阶梯”就是 L1 → L2 → L3 → 主存的延迟轮廓。
-
-──────────────────────────────────────────────────────────────
-  实验2 内存 vs 磁盘
-──────────────────────────────────────────────────────────────
-  内存顺序写 (memset, 512.0 MB, 3轮取最优) ...
-  内存顺序读 (逐缓存行累加, 512.0 MB) ...
-  内存拷贝 (memcpy, 512.0 MB) ...
-  内存随机访问延迟 (指针追逐, 64.0 MB) ...
-  磁盘顺序写 (512.0 MB → disk_bench.tmp, 含落盘) ...
-  磁盘顺序读 (disk_bench.tmp) ...
-  磁盘随机读延迟 (4KB × 64 次) ...
-
-  ── 内存 (512.0 MB) ──────────────────────────────────
-    顺序写带宽           25.31 GB/s
-    顺序读带宽           14.63 GB/s
-    拷贝带宽(读+写)      21.98 GB/s
-    随机访问延迟         81.78 ns
-
-  ── 磁盘文件 (512.0 MB, 用完即删) ───────────────────
-    顺序写带宽            0.74 GB/s
-    顺序读带宽            1.21 GB/s  (无缓冲, 绕开页缓存)
-    随机读延迟          102.47 µs   (无缓冲随机读)
-
-  数量级对比：内存随机访问比磁盘随机读快约 1253 倍
-  （真实机械硬盘随机延迟 5~15ms，NVMe SSD 20~100µs）
-
-──────────────────────────────────────────────────────────────
-  实验3 DMA：谁在搬运数据？
-──────────────────────────────────────────────────────────────
-  传输数据量: 512.0 MB
-
-  [无 DMA（PIO 模式）—— CPU 亲自搬运]
-    阶段1 搬运数据 .....    49.75 ms
-    阶段2 执行计算 .....    54.04 ms
-    总耗时 .............   103.79 ms   (CPU 全程忙碌)
-
-  [有 DMA —— CPU 发起传输后立即返回]
-    CPU 发起传输 .......     0.00 ms
-    CPU 并行执行计算 ...    54.00 ms
-    等待传输完成(中断) .     0.00 ms
-    总耗时 .............    54.00 ms   (CPU 几乎零等待)
-
-  对比：DMA 模式节省    49.79 ms（48.0%）
-  说明：真实 DMA 由硬件控制器（磁盘/网卡/显卡）直接读写内存，
-        CPU 只配置描述符并响应完成中断；本实验用后台线程模拟该机制。
-
-全部实验完成。
+--- Round 1 ---
+  list_insert: std=12.00ms  pool=5.00ms  speedup=240%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=49 (grow 49)
+    bytes: std=4800000 pool=4800000
+  map_insert: std=39.00ms  pool=30.00ms  speedup=130%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=49 (grow 49)
+    bytes: std=8000000 pool=8000000
+  vector_churn: std=6.00ms  pool=6.00ms  speedup=100%
+    alloc_calls: std=190 pool=190 (pool 内复用)
+    real_malloc: std=190 pool=190 (grow 10)
+    bytes: std=20971480 pool=20971480
+  churn: std=10.00ms  pool=0.00ms  speedup=0%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=2 (grow 2)
+    bytes: std=4800000 pool=4800000
+--- Round 2 ---
+  list_insert: std=9.00ms  pool=5.00ms  speedup=180%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=49 (grow 49)
+    bytes: std=4800000 pool=4800000
+  map_insert: std=36.00ms  pool=28.00ms  speedup=128%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=49 (grow 49)
+    bytes: std=8000000 pool=8000000
+  vector_churn: std=6.00ms  pool=7.00ms  speedup=85%
+    alloc_calls: std=190 pool=190 (pool 内复用)
+    real_malloc: std=190 pool=190 (grow 10)
+    bytes: std=20971480 pool=20971480
+  churn: std=9.00ms  pool=0.00ms  speedup=0%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=2 (grow 2)
+    bytes: std=4800000 pool=4800000
+--- Round 3 ---
+  list_insert: std=10.00ms  pool=5.00ms  speedup=200%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=49 (grow 49)
+    bytes: std=4800000 pool=4800000
+  map_insert: std=34.00ms  pool=29.00ms  speedup=117%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=49 (grow 49)
+    bytes: std=8000000 pool=8000000
+  vector_churn: std=7.00ms  pool=5.00ms  speedup=140%
+    alloc_calls: std=190 pool=190 (pool 内复用)
+    real_malloc: std=190 pool=190 (grow 10)
+    bytes: std=20971480 pool=20971480
+  churn: std=9.00ms  pool=2.00ms  speedup=450%
+    alloc_calls: std=200000 pool=200000 (pool 内复用)
+    real_malloc: std=200000 pool=2 (grow 2)
+    bytes: std=4800000 pool=4800000
